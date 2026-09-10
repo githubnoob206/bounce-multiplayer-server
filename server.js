@@ -19,15 +19,18 @@ app.get("/", (req, res) => {
 
 const lobbies = new Map();
 
+// Multiplayer uses one shared logical arena. The client scales this to the
+// size of its browser, so the server boundary and the visible boundary match.
 const ARENA = {
-  x: 35,
-  y: 92,
   width: 1000,
-  height: 650
+  height: 650,
+  playerRadius: 19,
+  bulletRadius: 13,
+  padding: 24
 };
 
 const MAX_PLAYERS = 2;
-const TICK = 1000 / 30;
+const TICK = 1000 / 60;
 
 function makeId() {
   return Math.random().toString(36).slice(2, 9);
@@ -63,8 +66,8 @@ function sendLobby(lobby) {
 function makePlayer(index) {
   return {
     x: index === 0 ? 250 : 750,
-    y: 420,
-    r: 19,
+    y: ARENA.height / 2,
+    r: ARENA.playerRadius,
     vx: 0,
     vy: 0,
     speed: 255,
@@ -86,8 +89,7 @@ function makeGame() {
     status: "waiting",
     players: {},
     bullets: [],
-    winner: null,
-    lastUpdate: Date.now()
+    winner: null
   };
 }
 
@@ -95,9 +97,7 @@ function resetGame(lobby) {
   lobby.status = "waiting";
   lobby.game = makeGame();
 
-  const ids = lobby.players;
-
-  ids.forEach((id, index) => {
+  lobby.players.forEach((id, index) => {
     lobby.game.players[id] = makePlayer(index);
   });
 
@@ -108,8 +108,8 @@ function startGame(lobby) {
   if (lobby.players.length !== 2) return;
 
   lobby.status = "playing";
+  lobby.game = makeGame();
   lobby.game.status = "playing";
-  lobby.game.winner = null;
 
   lobby.players.forEach((id, index) => {
     lobby.game.players[id] = makePlayer(index);
@@ -152,11 +152,11 @@ function clamp(v, a, b) {
 function segmentCircleHit(x1, y1, x2, y2, cx, cy, r) {
   const dx = x2 - x1;
   const dy = y2 - y1;
-
   const fx = x1 - cx;
   const fy = y1 - cy;
+  const rr = r * r;
 
-  if (fx * fx + fy * fy <= r * r) return true;
+  if (fx * fx + fy * fy <= rr) return true;
 
   const len2 = dx * dx + dy * dy;
 
@@ -174,7 +174,7 @@ function segmentCircleHit(x1, y1, x2, y2, cx, cy, r) {
   return (
     (px - cx) * (px - cx) +
     (py - cy) * (py - cy)
-  ) <= r * r;
+  ) <= rr;
 }
 
 function updateGame(lobby, dt) {
@@ -182,10 +182,27 @@ function updateGame(lobby, dt) {
 
   if (!game || game.status !== "playing") return;
 
-  const left = 59;
-  const right = ARENA.width - 59;
-  const top = 116;
-  const bottom = ARENA.height - 83;
+  const left =
+    ARENA.padding +
+    ARENA.playerRadius;
+
+  const right =
+    ARENA.width -
+    ARENA.padding -
+    ARENA.playerRadius;
+
+  const top =
+    ARENA.padding +
+    ARENA.playerRadius;
+
+  const bottom =
+    ARENA.height -
+    ARENA.padding -
+    ARENA.playerRadius;
+
+  // -----------------------------
+  // PLAYER MOVEMENT
+  // -----------------------------
 
   for (const id of lobby.players) {
     const p = game.players[id];
@@ -202,78 +219,178 @@ function updateGame(lobby, dt) {
 
     const len = Math.hypot(x, y) || 1;
 
-    p.vx = x / len * p.speed;
-    p.vy = y / len * p.speed;
+    p.vx =
+      x / len *
+      p.speed;
 
-    p.x = clamp(p.x + p.vx * dt, left, right);
-    p.y = clamp(p.y + p.vy * dt, top, bottom);
+    p.vy =
+      y / len *
+      p.speed;
 
-    p.cool = Math.max(0, p.cool - dt);
+    p.x = clamp(
+      p.x + p.vx * dt,
+      left,
+      right
+    );
+
+    p.y = clamp(
+      p.y + p.vy * dt,
+      top,
+      bottom
+    );
+
+    p.cool = Math.max(
+      0,
+      p.cool - dt
+    );
 
     if (p.shooting) {
       fire(lobby, id);
     }
   }
 
-  const L = 48;
-  const R = ARENA.width - 48;
-  const T = 105;
-  const B = ARENA.height - 72;
+  // -----------------------------
+  // BULLET BOUNDS
+  // -----------------------------
 
-  for (let i = game.bullets.length - 1; i >= 0; i--) {
+  const L =
+    ARENA.padding +
+    ARENA.bulletRadius;
+
+  const R =
+    ARENA.width -
+    ARENA.padding -
+    ARENA.bulletRadius;
+
+  const T =
+    ARENA.padding +
+    ARENA.bulletRadius;
+
+  const B =
+    ARENA.height -
+    ARENA.padding -
+    ARENA.bulletRadius;
+
+  // -----------------------------
+  // BULLETS
+  // -----------------------------
+
+  for (
+    let i = game.bullets.length - 1;
+    i >= 0;
+    i--
+  ) {
     const b = game.bullets[i];
 
     b.age += dt;
 
-    const speed = Math.hypot(b.vx, b.vy) || 1;
+    const speed =
+      Math.hypot(
+        b.vx,
+        b.vy
+      ) || 1;
 
-    const nx = -b.vy / speed;
-    const ny = b.vx / speed;
+    const nx =
+      -b.vy /
+      speed;
 
-    b.vx += nx * b.curve * dt;
-    b.vy += ny * b.curve * dt;
+    const ny =
+      b.vx /
+      speed;
+
+    b.vx +=
+      nx *
+      b.curve *
+      dt;
+
+    b.vy +=
+      ny *
+      b.curve *
+      dt;
 
     const oldX = b.x;
     const oldY = b.y;
 
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
+    b.x +=
+      b.vx *
+      dt;
 
-    b.rot = Math.atan2(b.vy, b.vx);
+    b.y +=
+      b.vy *
+      dt;
 
-    let remove = false;
+    b.rot =
+      Math.atan2(
+        b.vy,
+        b.vx
+      );
 
+    // Bounce off left/right walls
     if (b.x < L) {
-      b.x = L + (L - b.x);
-      b.vx = Math.abs(b.vx);
+      b.x =
+        L +
+        (L - b.x);
+
+      b.vx =
+        Math.abs(b.vx);
+
       b.curve *= -1;
     }
 
     if (b.x > R) {
-      b.x = R - (b.x - R);
-      b.vx = -Math.abs(b.vx);
+      b.x =
+        R -
+        (b.x - R);
+
+      b.vx =
+        -Math.abs(b.vx);
+
       b.curve *= -1;
     }
 
+    // Bounce off top/bottom walls
     if (b.y < T) {
-      b.y = T + (T - b.y);
-      b.vy = Math.abs(b.vy);
+      b.y =
+        T +
+        (T - b.y);
+
+      b.vy =
+        Math.abs(b.vy);
+
       b.curve *= -1;
     }
 
     if (b.y > B) {
-      b.y = B - (b.y - B);
-      b.vy = -Math.abs(b.vy);
+      b.y =
+        B -
+        (b.y - B);
+
+      b.vy =
+        -Math.abs(b.vy);
+
       b.curve *= -1;
     }
 
+    let remove = false;
+
+    // -----------------------------
+    // BULLET COLLISIONS
+    // -----------------------------
+
     for (const id of lobby.players) {
-      const target = game.players[id];
+      const target =
+        game.players[id];
 
       if (!target) continue;
 
-      // First second: bullet cannot hurt its owner.
-      if (id === b.owner && b.age < 1) continue;
+      // Prevent a newly fired bullet
+      // from immediately hitting its owner.
+      if (
+        id === b.owner &&
+        b.age < 1
+      ) {
+        continue;
+      }
 
       if (
         segmentCircleHit(
@@ -287,22 +404,33 @@ function updateGame(lobby, dt) {
         )
       ) {
         game.status = "finished";
+
         game.winner =
           id === b.owner
-            ? lobby.players.find(x => x !== id)
+            ? lobby.players.find(
+                x => x !== id
+              )
             : b.owner;
 
-        io.to(lobby.id).emit("gameOver", {
-          winner: game.winner
-        });
+        io.to(lobby.id).emit(
+          "gameOver",
+          {
+            winner:
+              game.winner
+          }
+        );
 
         remove = true;
+
         break;
       }
     }
 
     if (remove) {
-      game.bullets.splice(i, 1);
+      game.bullets.splice(
+        i,
+        1
+      );
     }
   }
 
@@ -314,240 +442,572 @@ function sendGameState(lobby) {
 
   if (!game) return;
 
-  io.to(lobby.id).emit("stateUpdated", {
-    status: game.status,
-    winner: game.winner,
-    players: game.players,
-    bullets: game.bullets
-  });
+  io.to(lobby.id).emit(
+    "stateUpdated",
+    {
+      status:
+        game.status,
+
+      winner:
+        game.winner,
+
+      players:
+        game.players,
+
+      bullets:
+        game.bullets,
+
+      serverTime:
+        Date.now()
+    }
+  );
 }
 
+// ============================================================
+// SOCKET.IO
+// ============================================================
+
 io.on("connection", socket => {
-  console.log("Connected:", socket.id);
+  console.log(
+    "Connected:",
+    socket.id
+  );
 
-  socket.emit("updateLobbies", publicLobbies());
+  socket.emit(
+    "updateLobbies",
+    publicLobbies()
+  );
 
-  socket.on("createLobby", rawName => {
-    let name = String(rawName || "").trim();
+  // ==========================================================
+  // CREATE LOBBY
+  // ==========================================================
 
-    if (!name) {
-      socket.emit("errorMessage", "Please enter a server name.");
-      return;
+  socket.on(
+    "createLobby",
+    rawName => {
+      let name =
+        String(
+          rawName || ""
+        ).trim();
+
+      if (!name) {
+        socket.emit(
+          "errorMessage",
+          "Please enter a server name."
+        );
+
+        return;
+      }
+
+      if (name.length > 32) {
+        name =
+          name.slice(
+            0,
+            32
+          );
+      }
+
+      if (socket.data.lobbyId) {
+        socket.emit(
+          "errorMessage",
+          "You are already in a server."
+        );
+
+        return;
+      }
+
+      const id =
+        makeId();
+
+      const lobby = {
+        id,
+        name,
+        host:
+          socket.id,
+
+        players: [
+          socket.id
+        ],
+
+        playerNames: {
+          [socket.id]:
+            "Player 1"
+        },
+
+        status:
+          "waiting",
+
+        game:
+          makeGame()
+      };
+
+      lobby.game.players[
+        socket.id
+      ] =
+        makePlayer(0);
+
+      lobbies.set(
+        id,
+        lobby
+      );
+
+      socket.join(id);
+
+      socket.data.lobbyId =
+        id;
+
+      socket.emit(
+        "lobbyCreated",
+        {
+          id,
+          name
+        }
+      );
+
+      sendLobby(lobby);
+
+      broadcastLobbies();
+
+      console.log(
+        `Lobby created: ${name} (${id})`
+      );
     }
+  );
 
-    if (name.length > 32) {
-      name = name.slice(0, 32);
+  // ==========================================================
+  // JOIN LOBBY
+  // ==========================================================
+
+  socket.on(
+    "joinLobby",
+    lobbyId => {
+      const lobby =
+        lobbies.get(
+          lobbyId
+        );
+
+      if (!lobby) {
+        socket.emit(
+          "errorMessage",
+          "That server no longer exists."
+        );
+
+        return;
+      }
+
+      if (
+        lobby.players.length >=
+        MAX_PLAYERS
+      ) {
+        socket.emit(
+          "errorMessage",
+          "That server is full."
+        );
+
+        return;
+      }
+
+      if (
+        lobby.status ===
+        "playing"
+      ) {
+        socket.emit(
+          "errorMessage",
+          "That game has already started."
+        );
+
+        return;
+      }
+
+      if (
+        socket.data.lobbyId
+      ) {
+        socket.emit(
+          "errorMessage",
+          "You are already in a server."
+        );
+
+        return;
+      }
+
+      lobby.players.push(
+        socket.id
+      );
+
+      lobby.playerNames[
+        socket.id
+      ] =
+        "Player 2";
+
+      lobby.game.players[
+        socket.id
+      ] =
+        makePlayer(1);
+
+      socket.join(
+        lobby.id
+      );
+
+      socket.data.lobbyId =
+        lobby.id;
+
+      io.to(
+        lobby.host
+      ).emit(
+        "playerJoined"
+      );
+
+      sendLobby(lobby);
+
+      broadcastLobbies();
     }
+  );
 
-    const id = makeId();
+  // ==========================================================
+  // START GAME
+  // ==========================================================
 
-    const lobby = {
-      id,
-      name,
-      host: socket.id,
-      players: [socket.id],
-      playerNames: {
-        [socket.id]: "Player 1"
-      },
-      status: "waiting",
-      game: makeGame()
-    };
+  socket.on(
+    "startGame",
+    () => {
+      const lobby =
+        lobbies.get(
+          socket.data.lobbyId
+        );
 
-    lobby.game.players[socket.id] = makePlayer(0);
+      if (!lobby) return;
 
-    lobbies.set(id, lobby);
+      if (
+        socket.id !==
+        lobby.host
+      ) {
+        socket.emit(
+          "errorMessage",
+          "Only the host can start the game."
+        );
 
-    socket.join(id);
+        return;
+      }
 
-    socket.data.lobbyId = id;
+      if (
+        lobby.players.length !==
+        2
+      ) {
+        socket.emit(
+          "errorMessage",
+          "You need 2 players to start."
+        );
 
-    socket.emit("lobbyCreated", {
-      id,
-      name
-    });
+        return;
+      }
 
-    sendLobby(lobby);
-    broadcastLobbies();
+      startGame(
+        lobby
+      );
 
-    console.log(`Lobby created: ${name} (${id})`);
-  });
-
-  socket.on("joinLobby", lobbyId => {
-    const lobby = lobbies.get(lobbyId);
-
-    if (!lobby) {
-      socket.emit("errorMessage", "That server no longer exists.");
-      return;
+      broadcastLobbies();
     }
+  );
 
-    if (lobby.players.length >= MAX_PLAYERS) {
-      socket.emit("errorMessage", "That server is full.");
-      return;
+  // ==========================================================
+  // RETRY / REMATCH
+  // ==========================================================
+
+  socket.on(
+    "retryGame",
+    () => {
+      const lobby =
+        lobbies.get(
+          socket.data.lobbyId
+        );
+
+      if (!lobby) return;
+
+      if (
+        socket.id !==
+        lobby.host
+      ) {
+        socket.emit(
+          "errorMessage",
+          "Only the host can retry."
+        );
+
+        return;
+      }
+
+      resetGame(
+        lobby
+      );
+
+      io.to(
+        lobby.id
+      ).emit(
+        "waitingForStart"
+      );
+
+      broadcastLobbies();
     }
+  );
 
-    if (lobby.status === "playing") {
-      socket.emit("errorMessage", "That game has already started.");
-      return;
+  // ==========================================================
+  // LEAVE
+  // ==========================================================
+
+  socket.on(
+    "leaveLobby",
+    () => {
+      leaveLobby(
+        socket
+      );
     }
+  );
 
-    if (socket.data.lobbyId) {
-      socket.emit("errorMessage", "You are already in a server.");
-      return;
+  // ==========================================================
+  // INPUT
+  // ==========================================================
+
+  socket.on(
+    "input",
+    data => {
+      const lobby =
+        lobbies.get(
+          socket.data.lobbyId
+        );
+
+      if (
+        !lobby ||
+        lobby.status !==
+          "playing"
+      ) {
+        return;
+      }
+
+      const p =
+        lobby.game.players[
+          socket.id
+        ];
+
+      if (!p) return;
+
+      const keys =
+        data &&
+        data.keys
+          ? data.keys
+          : {};
+
+      p.keys.w =
+        !!keys.w;
+
+      p.keys.a =
+        !!keys.a;
+
+      p.keys.s =
+        !!keys.s;
+
+      p.keys.d =
+        !!keys.d;
+
+      if (
+        typeof data.aim ===
+          "number" &&
+        Number.isFinite(
+          data.aim
+        )
+      ) {
+        p.aim =
+          data.aim;
+      }
+
+      p.shooting =
+        !!data.shooting;
     }
+  );
 
-    lobby.players.push(socket.id);
-    lobby.playerNames[socket.id] = "Player 2";
+  // ==========================================================
+  // DISCONNECT
+  // ==========================================================
 
-    socket.join(lobby.id);
-    socket.data.lobbyId = lobby.id;
+  socket.on(
+    "disconnect",
+    () => {
+      console.log(
+        "Disconnected:",
+        socket.id
+      );
 
-    lobby.game.players[socket.id] = makePlayer(1);
-
-    io.to(lobby.host).emit("playerJoined");
-
-    sendLobby(lobby);
-    broadcastLobbies();
-  });
-
-  socket.on("startGame", () => {
-    const lobby = lobbies.get(socket.data.lobbyId);
-
-    if (!lobby) return;
-
-    if (socket.id !== lobby.host) {
-      socket.emit("errorMessage", "Only the host can start the game.");
-      return;
+      leaveLobby(
+        socket
+      );
     }
-
-    if (lobby.players.length !== 2) {
-      socket.emit("errorMessage", "You need 2 players to start.");
-      return;
-    }
-
-    startGame(lobby);
-    broadcastLobbies();
-  });
-
-  socket.on("retryGame", () => {
-    const lobby = lobbies.get(socket.data.lobbyId);
-
-    if (!lobby) return;
-
-    if (socket.id !== lobby.host) {
-      socket.emit("errorMessage", "Only the host can retry.");
-      return;
-    }
-
-    resetGame(lobby);
-
-    io.to(lobby.id).emit("waitingForStart");
-
-    broadcastLobbies();
-  });
-
-  socket.on("leaveLobby", () => {
-    leaveLobby(socket);
-  });
-
-  socket.on("input", data => {
-    const lobby = lobbies.get(socket.data.lobbyId);
-
-    if (!lobby || lobby.status !== "playing") return;
-
-    const p = lobby.game.players[socket.id];
-
-    if (!p) return;
-
-    const keys = data && data.keys ? data.keys : {};
-
-    p.keys.w = !!keys.w;
-    p.keys.a = !!keys.a;
-    p.keys.s = !!keys.s;
-    p.keys.d = !!keys.d;
-
-    if (typeof data.aim === "number") {
-      p.aim = data.aim;
-    }
-
-    p.shooting = !!data.shooting;
-  });
-
-  socket.on("disconnect", () => {
-    console.log("Disconnected:", socket.id);
-    leaveLobby(socket);
-  });
+  );
 });
 
-function leaveLobby(socket) {
-  const lobbyId = socket.data.lobbyId;
+// ============================================================
+// LEAVE LOBBY
+// ============================================================
+
+function leaveLobby(
+  socket
+) {
+  const lobbyId =
+    socket.data.lobbyId;
 
   if (!lobbyId) return;
 
-  const lobby = lobbies.get(lobbyId);
+  const lobby =
+    lobbies.get(
+      lobbyId
+    );
 
   if (!lobby) {
-    socket.data.lobbyId = null;
+    socket.data.lobbyId =
+      null;
+
     return;
   }
 
-  // HOST LEAVES:
-  // Entire public lobby is destroyed.
-  if (socket.id === lobby.host) {
-    io.to(lobby.id).emit("hostLeft");
+  // ==========================================================
+  // HOST LEAVES
+  // ==========================================================
 
-    lobbies.delete(lobby.id);
+  // The host leaving destroys
+  // the entire public lobby.
 
-    io.in(lobby.id).socketsLeave(lobby.id);
+  if (
+    socket.id ===
+    lobby.host
+  ) {
+    io.to(
+      lobby.id
+    ).emit(
+      "hostLeft"
+    );
 
-    console.log(`Lobby removed because host left: ${lobby.name}`);
+    lobbies.delete(
+      lobby.id
+    );
+
+    io.in(
+      lobby.id
+    ).socketsLeave(
+      lobby.id
+    );
+
+    console.log(
+      `Lobby removed because host left: ${lobby.name}`
+    );
 
     broadcastLobbies();
 
-    socket.data.lobbyId = null;
+    socket.data.lobbyId =
+      null;
+
     return;
   }
 
-  // NORMAL PLAYER LEAVES:
-  lobby.players = lobby.players.filter(id => id !== socket.id);
+  // ==========================================================
+  // NORMAL PLAYER LEAVES
+  // ==========================================================
 
-  delete lobby.playerNames[socket.id];
+  lobby.players =
+    lobby.players.filter(
+      id =>
+        id !==
+        socket.id
+    );
 
-  if (lobby.game) {
-    delete lobby.game.players[socket.id];
-  }
+  delete lobby.playerNames[
+    socket.id
+  ];
 
-  socket.leave(lobby.id);
-  socket.data.lobbyId = null;
+  delete lobby.game.players[
+    socket.id
+  ];
 
-  if (lobby.players.length === 0) {
-    lobbies.delete(lobby.id);
+  socket.leave(
+    lobby.id
+  );
+
+  socket.data.lobbyId =
+    null;
+
+  if (
+    lobby.players.length ===
+    0
+  ) {
+    lobbies.delete(
+      lobby.id
+    );
   } else {
-    lobby.status = "waiting";
-    lobby.game.status = "waiting";
-    lobby.game.bullets = [];
-    lobby.game.winner = null;
+    lobby.status =
+      "waiting";
 
-    sendLobby(lobby);
+    lobby.game.status =
+      "waiting";
+
+    lobby.game.bullets =
+      [];
+
+    lobby.game.winner =
+      null;
+
+    sendLobby(
+      lobby
+    );
   }
 
   broadcastLobbies();
 }
 
-setInterval(() => {
-  const now = Date.now();
-  const dt = Math.min((now - lastTick) / 1000, 0.1);
+// ============================================================
+// 60 FPS SERVER LOOP
+// ============================================================
 
-  for (const lobby of lobbies.values()) {
-    updateGame(lobby, dt);
+let lastTick =
+  Date.now();
+
+setInterval(
+  () => {
+    const now =
+      Date.now();
+
+    const dt =
+      Math.min(
+        (now - lastTick) /
+          1000,
+        0.05
+      );
+
+    for (
+      const lobby of
+        lobbies.values()
+    ) {
+      updateGame(
+        lobby,
+        dt
+      );
+    }
+
+    lastTick =
+      now;
+  },
+  TICK
+);
+
+// ============================================================
+// SERVER
+// ============================================================
+
+const PORT =
+  process.env.PORT ||
+  3000;
+
+server.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+    console.log(
+      `BOUNCE server running on port ${PORT}`
+    );
   }
-
-  lastTick = now;
-}, TICK);
-
-let lastTick = Date.now();
-
-const PORT = process.env.PORT || 3000;
-
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`BOUNCE server running on port ${PORT}`);
-});
+);
