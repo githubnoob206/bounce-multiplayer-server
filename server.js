@@ -24,7 +24,7 @@ const lobbies = new Map();
 const ARENA = {
   width: 1000,
   height: 650,
-  playerRadius: 19,
+  playerRadius: 0,
   bulletRadius: 13,
   padding: 0
 };
