@@ -26,7 +26,7 @@ const ARENA = {
   height: 650,
   playerRadius: 19,
   bulletRadius: 13,
-  padding: 24
+  padding: 0
 };
 
 const MAX_PLAYERS = 2;
