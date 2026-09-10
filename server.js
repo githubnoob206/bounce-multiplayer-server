@@ -24,7 +24,7 @@ const lobbies = new Map();
 const ARENA = {
   width: 1000,
   height: 650,
-  playerRadius: 0,
+  playerRadius: 19,
   bulletRadius: 13,
   padding: 0
 };
@@ -182,23 +182,10 @@ function updateGame(lobby, dt) {
 
   if (!game || game.status !== "playing") return;
 
-  const left =
-    ARENA.padding +
-    ARENA.playerRadius;
-
-  const right =
-    ARENA.width -
-    ARENA.padding -
-    ARENA.playerRadius;
-
-  const top =
-    ARENA.padding +
-    ARENA.playerRadius;
-
-  const bottom =
-    ARENA.height -
-    ARENA.padding -
-    ARENA.playerRadius;
+  const left = ARENA.padding;
+  const right = ARENA.width - ARENA.padding;
+  const top = ARENA.padding;
+  const bottom = ARENA.height - ARENA.padding;
 
   // -----------------------------
   // PLAYER MOVEMENT
