@@ -5,7 +5,14 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = createServer(app);
-const io = new Server(server);
+
+// Configure Socket.IO with CORS enabled for your website domain
+const io = new Server(server, {
+  cors: {
+    origin: "*", // Allows connections from any website domain (like taysh.xyz)
+    methods: ["GET", "POST"]
+  }
+});
 
 // Serve the index.html file to the browser
 app.get('/', (req, res) => {
@@ -49,7 +56,6 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
-    // Cleanup logic for when a player leaves a lobby can go here
   });
 });
 
