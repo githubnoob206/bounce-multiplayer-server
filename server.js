@@ -55,6 +55,9 @@ io.on('connection', socket => {
 
   socket.on('list-lobbies', () => {
     socket.emit('lobby-list', publicLobbyList());
+
+  socket.on('ping-check', clientTime => {
+    socket.emit('pong-check', clientTime);
   });
 
   socket.on('create-lobby', (payload = {}) => {
