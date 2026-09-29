@@ -19,6 +19,7 @@
 // ---------------------------------------------------------------------
 
 const http = require('http');
+const crypto = require('crypto');
 const { Server } = require('socket.io');
 
 const PORT = process.env.PORT || 3000;
@@ -48,6 +49,57 @@ function publicLobbyList() {
 function broadcastLobbies() {
   io.emit('lobby-list', publicLobbyList());
 }
+
+
+// ---------------------------------------------------------------------
+// PRO CODES
+// ---------------------------------------------------------------------
+// Valid codes come from the PRO_CODES environment variable on Render
+// (comma-separated, e.g.  12345,67890,24680). 55555 is always accepted
+// as a test code -- DELETE it from TEST_CODES below before selling.
+// PRO_SECRET signs the receipt tokens; set it to any long random string
+// in Render's environment settings so receipts survive restarts.
+const TEST_CODES = ['55555'];
+const PRO_CODES = new Set(
+  (process.env.PRO_CODES || '').split(',').map(c => c.trim()).filter(Boolean).concat(TEST_CODES)
+);
+const PRO_SECRET = process.env.PRO_SECRET || 'change-me-set-PRO_SECRET-in-render';
+
+function signToken(id) {
+  const sig = crypto.createHmac('sha256', PRO_SECRET).update(id).digest('hex');
+  return id + '.' + sig;
+}
+function verifyToken(token) {
+  if (typeof token !== 'string') return false;
+  const [id, sig] = token.split('.');
+  if (!id || !sig) return false;
+  const good = crypto.createHmac('sha256', PRO_SECRET).update(id).digest('hex');
+  if (sig.length !== good.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(good));
+}
+
+// Rate limit: 8 wrong guesses per IP per 15 minutes.
+const attempts = new Map(); // ip -> { count, resetAt }
+const MAX_BAD = 8, WINDOW_MS = 15 * 60 * 1000;
+function clientIp(socket) {
+  const fwd = socket.handshake.headers['x-forwarded-for'];
+  return (fwd ? String(fwd).split(',')[0].trim() : socket.handshake.address) || 'unknown';
+}
+function isLimited(ip) {
+  const a = attempts.get(ip);
+  if (!a) return false;
+  if (Date.now() > a.resetAt) { attempts.delete(ip); return false; }
+  return a.count >= MAX_BAD;
+}
+function recordBad(ip) {
+  const a = attempts.get(ip);
+  if (!a || Date.now() > a.resetAt) attempts.set(ip, { count: 1, resetAt: Date.now() + WINDOW_MS });
+  else a.count++;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, a] of attempts) if (now > a.resetAt) attempts.delete(ip);
+}, 60 * 1000).unref();
 
 io.on('connection', socket => {
   socket.data.lobbyId = null;
@@ -132,6 +184,26 @@ io.on('connection', socket => {
     const lobby = lobbies.get(socket.data.lobbyId);
     if (!lobby || lobby.hostId !== socket.id || !lobby.guestId) return;
     io.to(lobby.guestId).emit('game-over', payload);
+  });
+
+  // ---- Pro code activation (client waits for an ack callback) ----
+  socket.on('pro-activate', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const ip = clientIp(socket);
+    if (isLimited(ip)) return ack({ ok: false, reason: 'rate-limit' });
+    const code = String((payload && payload.code) || '').trim();
+    if (/^\d{5}$/.test(code) && PRO_CODES.has(code)) {
+      const id = crypto.randomBytes(12).toString('hex');
+      return ack({ ok: true, token: signToken(id) });
+    }
+    recordBad(ip);
+    ack({ ok: false, reason: 'invalid' });
+  });
+
+  // ---- Re-validates a saved receipt when the game reconnects ----
+  socket.on('pro-check', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({ ok: verifyToken(payload && payload.token) });
   });
 
   socket.on('disconnect', () => leaveLobby(socket));
